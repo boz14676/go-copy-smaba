@@ -9,7 +9,38 @@ import (
     "os/user"
     "runtime"
     "strings"
-    "github.com/syyongx/php2go"
+)
+
+const (
+    /**
+     * Local drive for windows.
+     */
+    LOCAL_WINDOWS_DRIVE string = "m:"
+
+    /**
+     * Local path.
+     */
+    LOCAL_PATH = ".ff_sfw-tmp"
+
+    /**
+     * Network address which contains project path of foundation.
+     */
+    NET_ADDR = "DESKTOP-KGHP3M7/smb-storage"
+
+    /**
+     * Network username.
+     */
+    NET_USER = "share_user"
+
+    /**
+     * Network user password.
+     */
+    NET_PWD = "123456"
+
+    /**
+     * Network current project path.
+     */
+    PROJECT_CUR_PATH = "smb_test"
 )
 
 func copy2(src, dst string) (int64, error) {
@@ -33,72 +64,93 @@ func copy2(src, dst string) (int64, error) {
         return 0, err
     }
     defer destination.Close()
+
     nBytes, err := io.Copy(destination, source)
     return nBytes, err
 }
 
-func exec_cmd(cmd string) {
+func exec2(cmd string) (err error) {
     // fmt.Println("command: \"" + cmd + "\"")
-    // splitting head => g++ parts => rest of the command
     parts := strings.Fields(cmd)
 
     head := parts[0]
     parts = parts[1:]
 
-    _, err := exec.Command(head, parts...).Output()
+    _, err = exec.Command(head, parts...).Output()
 
-    if err != nil {
-        fmt.Printf("%s %s", err)
-    }
-
-    // fmt.Printf("%s \n", out)
+    return
 }
 
-func mount_01() string {
+func mount() (destDir string, err error) {
+
+    /**
+     * Get current user
+     */
     usr, err := user.Current()
     if err != nil {
-        log.Fatal(err)
+        return
     }
 
-    destDir := usr.HomeDir + "/.ff_sfw-tmp"
-    if ! php2go.FileExists(destDir) {
-        err = os.Mkdir(destDir, 0755)
-        if err != nil {
-            log.Fatal(err)
+    destDir = usr.HomeDir + "/" + LOCAL_PATH
+
+    /**
+     * Mkdir from $HOME if the specified directory is not exists.
+     */
+    if _, err = os.Stat(destDir); os.IsNotExist(err) {
+        if err = os.Mkdir(destDir, 0755); err != nil {
+            return
         }
     }
 
-    if runtime.GOOS != "windows" {
-        exec_cmd("mount_smbfs smb://smb_user:smb123@192.168.1.180/smb-storage " + destDir)
-    } else {
-        exec_cmd("net use e: \\\\192.168.1.180\\smb-storage\\smb_test smb123 /user:smb_user" + destDir)
-    }
+    /**
+     * Mount a local mapping which is related to specified network address.
+     */
+    err = exec2("mount_smbfs smb://" + NET_USER + ":" + NET_PWD + "@" + NET_ADDR + "/" + PROJECT_CUR_PATH + " " + destDir)
 
-    return destDir
+    return
 }
 
 func main() {
-    fmt.Println("\\\\")
-    os.Exit(3)
-
-    fmt.Println("The script is beginning.")
+    /**
+     * Initialized.
+     */
+    log.Println("The cp1 script is beginning.")
 
     if len(os.Args) != 3 {
-        fmt.Println("Please provide one command line arguments!")
+        log.Println("Please provide one command line arguments!")
         return
     }
 
     sourceFile := os.Args[1]
     destFile := os.Args[2]
 
-    // mount files
-    destDir := mount_01()
+    /**
+     * Mount a local mapping which is related to specified network address.
+     */
+
+    var destDir string
+    var err error
+
+    if runtime.GOOS != "windows" {
+        destDir, err = mount()
+    } else {
+        destDir, err = win_mount()
+    }
+
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    /**
+     * Copy files.
+     */
     destFile = destDir + "/" + destFile
 
     nBytes, err := copy2(sourceFile, destFile)
+
     if err != nil {
-        fmt.Printf("The copy2 operation failed %q\n", err)
+        log.Printf("The copy2 operation failed %q\n", err)
     } else {
-        fmt.Printf("Copied %d bytes!\n", nBytes)
+        log.Printf("Copied %d bytes!\n", nBytes)
     }
 }

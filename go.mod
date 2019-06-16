@@ -1,3 +1,5 @@
-module go-copy-smaba
+module go-copy-samba
 
 go 1.12
+
+require github.com/sirupsen/logrus v1.4.2 // indirect
