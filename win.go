@@ -13,7 +13,7 @@ func win_mount() (drive string, err error) {
 
     // TODO: Replace duplicated default windows local dirve if it is necessary.
 
-    if _, err := os.Stat(LOCAL_WINDOWS_DRIVE); os.IsNotExist(err) {
+    if _, err = os.Stat(LOCAL_WINDOWS_DRIVE); os.IsNotExist(err) {
         err = exec2("net use " + LOCAL_WINDOWS_DRIVE + " \\\\" + NET_ADDR + "\\" + PROJECT_CUR_PATH + " " + NET_USER + " /user:" + NET_PWD)
 
         if err != nil {
