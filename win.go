@@ -11,17 +11,17 @@ func win_mount() (drive string, err error) {
         return
     }
 
-    // TODO: Replace duplicated default windows local dirve if it is necessary.
+    // TODO: Replace duplicated default windows local drive if it is necessary.
 
-    if _, err = os.Stat(LOCAL_WINDOWS_DRIVE); os.IsNotExist(err) {
-        err = exec2("net use " + LOCAL_WINDOWS_DRIVE + " \\\\" + NET_ADDR + "\\" + PROJECT_CUR_PATH + " " + NET_USER + " /user:" + NET_PWD)
+    if _, err = os.Stat(localWindowsDrive); os.IsNotExist(err) {
+        err = Exec2("net use " + localWindowsDrive + " \\\\" + netAddr + "\\" + projectCurPath + " " + netUser + " /user:" + netPwd)
 
         if err != nil {
             return
         }
     }
 
-    return LOCAL_WINDOWS_DRIVE, nil
+    return localWindowsDrive, nil
 }
 
 func get_drives() (r []string){
