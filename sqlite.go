@@ -3,16 +3,18 @@ package main
 import (
     "database/sql"
     "errors"
-    "fmt"
     _ "github.com/mattn/go-sqlite3"
+    "regexp"
+    "strconv"
+    "strings"
     "time"
 )
 
 const (
-    StatusWaited    int8 = 0 // Status of waited.
-    StatusProceed   int8 = 1 // Status of proceed.
-    StatusSucceeded int8 = 2 // Status of succeeded.
-    StatusFailed    int8 = 3 // Status of failed.
+    StatusWaited     int8 = 0 // Status of waited.
+    StatusProcessing int8 = 1 // Status of proceed.
+    StatusSucceeded  int8 = 2 // Status of succeeded.
+    StatusFailed     int8 = 3 // Status of failed.
 
     // Upload log tag.
     SqliteLogTag string = "sqlite"
@@ -51,24 +53,33 @@ func (upload *Upload) Store() (err error) {
     return
 }
 
-func (upload *Upload) Save(status int8, optional ...int64) (affect int64, err error) {
+func SafeStr(s string) string {
+    chars := []string{"]", "^", "\\\\", "[", ".", "(", ")"}
+    r := strings.Join(chars, "")
+    re := regexp.MustCompile("[" + r + "]+")
+    s = re.ReplaceAllString(s, "")
+
+    return s
+}
+
+func (upload *Upload) SaveStatus(optional ...int64) (affect int64, err error) {
     db, err := sql.Open("sqlite3", "./foo.db")
     if err != nil {
         return
     }
 
-    var nBytes int64 = 0
+    var nBytes int64
 
     if len(optional) > 0 {
         nBytes = optional[0]
     }
 
-    stmt, err := db.Prepare("update files_trans set status=? and files_trans_size=? where id=?")
+    stmt, err := db.Prepare("update files_trans set status=?, files_trans_size=?, updated=? where id=?")
     if err != nil {
         return
     }
 
-    res, err := stmt.Exec(status, nBytes, upload.UUID)
+    res, err := stmt.Exec(upload.Status, nBytes, time.Now(), upload.UUID)
     if err != nil {
         return
     }
@@ -86,68 +97,82 @@ func (upload *Upload) Save(status int8, optional ...int64) (affect int64, err er
     return
 }
 
-func test() {
+func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error) {
     db, err := sql.Open("sqlite3", "./foo.db")
-    checkErr2(err)
+    if err != nil {
+        return
+    }
 
-    // 插入数据
-    stmt, err := db.Prepare("INSERT INTO userinfo(username, department, created) values(?,?,?)")
-    checkErr2(err)
+    querySql := "SELECT * FROM files_trans WHERE 1=1"
 
-    res, err := stmt.Exec("astaxie", "研发部门", "2012-12-09")
-    checkErr2(err)
+    // Filter for created of time.
+    if listMsg.Created != 0 {
+        querySql += " AND created = \"" + time.Unix(listMsg.Created, 0).String() + "\""
+    } else {
+        if listMsg.StartedAt != 0 && listMsg.EndedAt != 0 {
 
-    id, err := res.LastInsertId()
-    checkErr2(err)
+            querySql += " AND created BETWEEN \"" +
+                time.Unix(listMsg.StartedAt, 0).String() + "\" AND \"" +
+                time.Unix(listMsg.EndedAt, 0).String() + "\""
 
-    fmt.Println(id)
-    // 更新数据
-    stmt, err = db.Prepare("update userinfo set username=? where uid=?")
-    checkErr2(err)
+        } else if listMsg.StartedAt != 0 {
 
-    res, err = stmt.Exec("astaxieupdate", id)
-    checkErr2(err)
+            querySql += " AND created >= \"" + time.Unix(listMsg.StartedAt, 0).String() + "\""
 
-    affect, err := res.RowsAffected()
-    checkErr2(err)
+        } else if listMsg.EndedAt != 0 {
 
-    fmt.Println(affect)
+            querySql += " AND created <= \"" + time.Unix(listMsg.EndedAt, 0).String() + "\""
 
-    // 查询数据
-    rows, err := db.Query("SELECT * FROM userinfo")
-    checkErr2(err)
+        }
+    }
+
+    // Filter status.
+    if listMsg.Status != -1 {
+        querySql += " AND status = " + strconv.Itoa(int(listMsg.Status))
+    }
+
+    // Sort sequence.
+    if listMsg.Sort != "" {
+        querySql += " ORDER BY id " + listMsg.Sort
+    }
+
+    // Limit the records of returned.
+    if listMsg.Offset != -1 {
+        var limit string
+
+        if listMsg.Limit != -1 {
+            limit = strconv.Itoa(int(listMsg.Limit))
+        } else {
+            limit = "20"
+        }
+
+        querySql += " LIMIT " + limit + " OFFSET " + strconv.Itoa(int(listMsg.Offset))
+    }
+
+    rows, err := db.Query(SafeStr(querySql))
+    if err != nil {
+        return
+    }
+
+    // logrus.Debug(SafeStr(querySql))
 
     for rows.Next() {
-        var uid int
-        var username string
-        var department string
-        var created time.Time
-        err = rows.Scan(&uid, &username, &department, &created)
-        checkErr2(err)
-        fmt.Println(uid)
-        fmt.Println(username)
-        fmt.Println(department)
-        fmt.Println(created)
+        err = rows.Scan(&upload.UUID, &upload.SourceFile, &upload.DestFile, &upload.Status, &upload.TotalSize, &upload.Created, &upload.Updated)
+        if err != nil {
+            logger(SqliteLogTag).Error("rows scanning: ", err)
+            continue
+        }
+
+        uploadList = append(uploadList, struct {
+            *Upload
+            Created int64
+            Updated int64
+        }{
+            Upload: upload,
+            Created: upload.Created.Unix(),
+            Updated: upload.Updated.Unix(),
+        })
     }
 
-    // 删除数据
-    stmt, err = db.Prepare("delete from userinfo where uid=?")
-    checkErr2(err)
-
-    res, err = stmt.Exec(id)
-    checkErr2(err)
-
-    affect, err = res.RowsAffected()
-    checkErr2(err)
-
-    fmt.Println(affect)
-
-    db.Close()
-
-}
-
-func checkErr2(err error) {
-    if err != nil {
-        panic(err)
-    }
+    return
 }

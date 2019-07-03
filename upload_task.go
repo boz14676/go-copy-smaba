@@ -1,10 +1,5 @@
 package main
 
-import (
-    "errors"
-    "time"
-)
-
 const (
     // Timeout for each task.
     timeout = 30
@@ -13,7 +8,7 @@ const (
     taskLogTag = "upload_task"
 )
 
-var JobChan = make(chan Upload, 1000) // Global channel queue.
+var JobChan = make(chan *Upload, 1000) // Global channel queue.
 
 // Monitor queues task.
 func Monitor() {
@@ -22,18 +17,7 @@ func Monitor() {
     for {
         select {
         case job := <-JobChan:
-            checked := make(chan bool)
-            go func() {
-                job.Process(checked)
-            }()
-
-            select {
-            case <-checked:
-                return
-            case <-time.After(timeout * time.Second):
-                job.log(taskLogTag).Error(errors.New("timeout for processing"))
-                return
-            }
+            job.Process()
         }
     }
 
@@ -41,7 +25,7 @@ func Monitor() {
 
 func Enqueue(upload *Upload) {
     // Enqueue
-    JobChan <- *upload
+    JobChan <- upload
 }
 
 // Timeout mechanism.

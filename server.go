@@ -4,7 +4,6 @@ import (
     "encoding/json"
     "errors"
     "flag"
-    "fmt"
     "github.com/gorilla/websocket"
     "html/template"
     "io/ioutil"
@@ -25,6 +24,9 @@ const (
 
     // Action for offwatch of heartbeat-pack.
     ActOffWatch = "OFFWATCH"
+
+    // Action for list of uploaded.
+    ActList = "LIST"
 )
 
 var addr = flag.String("addr", "localhost:8080", "http service address")
@@ -41,12 +43,42 @@ type Message struct {
 }
 
 // Client message for upload.
-type UploadMsg struct {
+type UploadOptMsg struct {
     Opt UploadList `json:"opt"`
 }
 
-// Upload message variable.
-var UploadSave *UploadList
+// Client message for list of uploaded.
+type ListOptMsg struct {
+    Opt ListMsg `json:"opt"`
+}
+
+// Client message for request params of list.
+type ListMsg struct {
+    Offset    int64  `json:"offset"`
+    Limit     int64  `json:"amt"`
+    Sort      string `json:"sort"`
+    Created   int64  `json:"created"`
+    StartedAt int64  `json:"from"`
+    EndedAt   int64  `json:"to"`
+    Status    int8   `json:"status"`
+}
+
+type ListRespMsg struct {
+    List interface{} `json:"list"`
+}
+
+// Initialized message of list.
+func (listMsg *ListMsg) Init() {
+    listMsg.Offset = -1
+    listMsg.Limit = -1
+    listMsg.Status = -1
+}
+
+// Upload message global variable.
+var UploadSave UploadList
+
+// Connection global variable for websocket.
+var WsConn *websocket.Conn
 
 // Websocket service.
 func ws(w http.ResponseWriter, r *http.Request) {
@@ -56,13 +88,16 @@ func ws(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    WsConn = c
+
+    // Ticker
+    go Ticker()
+
     defer c.Close()
 
     for {
         var m Message
-
-        // Ticker
-        Ticker(c)
+        var resp RespWrap
 
         // Get io.Reader of client message.
         _, r, err := c.NextReader()
@@ -72,125 +107,182 @@ func ws(w http.ResponseWriter, r *http.Request) {
         recv, err := ioutil.ReadAll(r)
 
         err = json.Unmarshal(recv, &m)
-        checkErr(wsLogTag, err)
+        if err != nil {
+            resp.setStatus(400, "request data illegal: " + string(recv))
+            if err := c.WriteJSON(resp); err != nil {
+                logger(wsLogTag).Error(err)
+            }
+
+            continue
+        }
 
         // Main process.
         switch strings.ToUpper(m.Method) {
 
         // Process files upload.
         case ActUpload:
-            var uploadMsg UploadMsg
+            var uploadMsg UploadOptMsg
+
+            // Log for request "upload" message.
+            logger(wsLogTag).Debug("act-upload is calling: ", string(recv))
 
             err = json.Unmarshal(recv, &uploadMsg)
-            checkErr(wsLogTag, err)
+            if err != nil || uploadMsg.Opt.List == nil || len(uploadMsg.Opt.List) == 0 {
+                logger(wsLogTag).Error(errors.New("data illegal in message of upload: " + string(recv)))
 
-            if uploadMsg.Opt.List == nil || len(uploadMsg.Opt.List) == 0 {
-                checkErr(wsLogTag, errors.New("data illegal in message of upload"))
-            }
-
-            // Inject list parameter of `opt` in upload message into `UploadSave` global variable.
-            UploadSave = &uploadMsg.Opt
-            UploadSave.Process()
-
-            // fmt.Printf("UploadMsg: %+v \n", UploadSave)
-
-            var resp RespWrap
-            if len(UploadSave.List) == 0 {
-                logger(wsLogTag).Error(errors.New("illegal data response for upload message"))
-
-                resp.setStatus(500, "error data responded")
+                resp.setStatus(400, "request data illegal in message of upload: " + string(recv))
+                if err := c.WriteJSON(resp); err != nil {
+                    logger(wsLogTag).Error(err)
+                }
             } else {
+                UploadSave.List = append(UploadSave.List, uploadMsg.Opt.List...)
+
+                UploadSave.Process()
+
                 resp.setStatus(200)
+                resp.respWrapper(strings.ToLower(ActUpload), UploadSave)
+                if err := c.WriteJSON(resp); err != nil {
+                    logger(wsLogTag).Error(err)
+                }
             }
 
-            resp.respWrapper(strings.ToLower(ActUpload), UploadSave)
+        // Get list for file tasks.
+        case ActList:
+            var listMsg ListOptMsg
+            listMsg.Opt.Init()
 
-            if err := c.WriteJSON(resp); err != nil {
+            logger(wsLogTag).Debug("act-list is calling: ", string(recv))
+
+            err = json.Unmarshal(recv, &listMsg)
+            if err != nil {
                 logger(wsLogTag).Error(err)
+
+                resp.setStatus(400, "request data illegal in message of list: " + string(recv))
+                if err := c.WriteJSON(resp); err != nil {
+                    logger(wsLogTag).Error(err)
+                }
+
+            } else {
+                var upload Upload
+                uploadList, err := upload.List(listMsg.Opt)
+                if err != nil {
+                    logger(wsLogTag).Error(err)
+
+                    resp.setStatus(500, "response errors occurred: " + string(recv))
+                    if err := c.WriteJSON(resp); err != nil {
+                        logger(wsLogTag).Error(err)
+                    }
+                } else {
+                    var listResp ListRespMsg
+                    listResp.List = uploadList
+
+                    resp.setStatus(200)
+                    resp.respWrapper(strings.ToLower(ActList), listResp)
+
+                    if err := c.WriteJSON(resp); err != nil {
+                        logger(wsLogTag).Error(err)
+                    }
+                }
             }
 
+        // Watching for processing of files transfer.
         case ActWatch:
-            var watchMsg UploadMsg
+            var watchMsg UploadOptMsg
             err = json.Unmarshal(recv, &watchMsg)
-            checkErr(wsLogTag, err)
 
-            if watchMsg.Opt.List == nil || len(watchMsg.Opt.List) == 0 {
-                checkErr(wsLogTag, errors.New("data illegal in message of heartbeat"))
-            }
+            logger(wsLogTag).Debug("act-watch is calling: ", string(recv))
 
-            var resp RespWrap
-            if UploadSave.List == nil || len(UploadSave.List) == 0 {
-                resp.setStatus(403, "no job are processing")
-            }
+            if err != nil {
+                logger(wsLogTag).Error(errors.New("request data illegal in message of act-watch: " + string(recv)))
 
-            // log.Printf("WatchMsg: %+v \n", UploadSave)
+                resp.setStatus(400, "request data illegal in message of watch: " + string(recv))
+                if err := c.WriteJSON(resp); err != nil {
+                    logger(wsLogTag).Error(err)
+                }
+            } else {
+                // Check global variable "uploadSave" if empty.
+                if UploadSave.List == nil || len(UploadSave.List) == 0 {
+                    logger(wsLogTag).Error(errors.New("no job are processing in message of act-watch"))
 
-            set := make(map[int64]*Upload)
-            for i := range UploadSave.List {
-                set[UploadSave.List[i].UUID] = &UploadSave.List[i]
-            }
-
-            for _, _upload := range watchMsg.Opt.List {
-                upload := set[_upload.UUID]
-                if upload == nil {
-                    resp.setStatus(403, fmt.Sprintf("no job found by uuid %d", _upload.UUID))
+                    resp.setStatus(403, "no job are processing")
+                    resp.respWrapper(strings.ToLower(ActWatch))
 
                     if err := c.WriteJSON(resp); err != nil {
                         logger(wsLogTag).Error(err)
                     }
-                    return
+                } else {
+                    // Watching all the processing tasks when opt-msg is empty.
+                    if watchMsg.Opt.List == nil {
+                        for _, upload := range UploadSave.List {
+                            upload.EmitWatch()
+                        }
+                    } else {
+                        // Watching specified upload from uuid.
+                        set := make(map[int64]*Upload)
+                        for _, upload := range UploadSave.List {
+                            set[upload.UUID] = upload
+                        }
+
+                        for _, _upload := range watchMsg.Opt.List {
+                            if set[_upload.UUID] != nil {
+                                set[_upload.UUID].EmitWatch()
+                            }
+                        }
+                    }
                 }
-
-                upload.EmitWatch()
             }
 
-            resp.setStatus(200)
-
-            if err := c.WriteJSON(resp); err != nil {
-                logger(wsLogTag).Error(err)
-            }
-
+        // Stop watching for processing of files transfer.
         case ActOffWatch:
-            var watchMsg UploadMsg
+            var watchMsg UploadOptMsg
             err = json.Unmarshal(recv, &watchMsg)
-            checkErr(wsLogTag, err)
 
-            if watchMsg.Opt.List == nil || len(watchMsg.Opt.List) == 0 {
-                checkErr(wsLogTag, errors.New("data illegal in message of heartbeat"))
-            }
+            logger(wsLogTag).Debug("act-off-watch is calling: ", string(recv))
 
-            var resp RespWrap
-            if UploadSave.List == nil || len(UploadSave.List) == 0 {
-                resp.setStatus(403, "no job are processing")
-            }
+            if err != nil {
+                logger(wsLogTag).Error(errors.New("request data illegal in message of act-off-watch: " + string(recv)))
 
-            // log.Printf("WatchMsg: %+v \n", UploadSave)
+                resp.setStatus(400, "request data illegal in message of off-watch: " + string(recv))
+                if err := c.WriteJSON(resp); err != nil {
+                    logger(wsLogTag).Error(err)
+                }
+            } else {
+                if UploadSave.List == nil || len(UploadSave.List) == 0 {
+                    logger(wsLogTag).Error(errors.New("no job are processing in message of act-off-watch"))
 
-            set := make(map[int64]*Upload)
-            for i := range UploadSave.List {
-                set[UploadSave.List[i].UUID] = &UploadSave.List[i]
-            }
-
-            for _, _upload := range watchMsg.Opt.List {
-                upload := set[_upload.UUID]
-                if upload == nil {
-                    resp.setStatus(403, fmt.Sprintf("no job found by uuid %d", _upload.UUID))
+                    resp.setStatus(403, "no job are processing")
+                    resp.respWrapper(strings.ToLower(ActWatch))
 
                     if err := c.WriteJSON(resp); err != nil {
                         logger(wsLogTag).Error(err)
                     }
-                    return
-                }
+                } else {
+                    // Stop Watching all the processing tasks when opt-msg is empty.
+                    if watchMsg.Opt.List == nil {
+                        for _, upload := range UploadSave.List {
+                            upload.EmitOffWatch()
+                        }
+                    } else {
+                        // Stop Watching specified upload from uuid.
+                        set := make(map[int64]*Upload)
+                        for _, upload := range UploadSave.List {
+                            set[upload.UUID] = upload
+                        }
 
-                upload.EmitOffWatch()
+                        for _, _upload := range watchMsg.Opt.List {
+                            if set[_upload.UUID] != nil {
+                                set[_upload.UUID].EmitOffWatch()
+                            }
+                        }
+                    }
+                }
             }
 
-            resp.setStatus(200)
-
+        default:
+            resp.setStatus(400, "request data illegal: " + string(recv))
             if err := c.WriteJSON(resp); err != nil {
                 logger(wsLogTag).Error(err)
             }
-
         }
 
     }
@@ -198,10 +290,10 @@ func ws(w http.ResponseWriter, r *http.Request) {
 
 // Response wrap struct.
 type RespWrap struct {
-    Cmd       string `json:"cmd"`
-    Timestamp string `json:"timestamp"`
-    Code      int16 `json:"code"`
-    Messgae   string `json:"message"`
+    Cmd       string      `json:"cmd"`
+    Timestamp int64       `json:"timestamp"`
+    Code      int16       `json:"code"`
+    Message   string      `json:"msg"`
     Data      interface{} `json:"data"`
 }
 
@@ -210,9 +302,11 @@ func (resp *RespWrap) setStatus(code int16, optional ...string) {
     resp.Code = code
 
     if len(optional) == 1 {
-        resp.Messgae = optional[0]
+        resp.Message = optional[0]
     } else {
-        resp.Messgae = "the request has proceed successful."
+        if resp.Code == 200 {
+            resp.Message = "the request has succeeded."
+        }
     }
 }
 
@@ -236,11 +330,12 @@ func (resp *RespWrap) respWrapper(args ...interface{}) {
         }
     }
 
-    resp.Timestamp = time.Now().Format("2006-01-02 15:04:05")
+    resp.Timestamp = time.Now().Unix()
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
     homeTemplate.Execute(w, "ws://"+r.Host+"/files_trans")
+    // homeTemplate.Execute(w, "ws://localhost:333/ws")
 }
 
 func openWs() {
@@ -257,70 +352,49 @@ var homeTemplate = template.Must(template.New("").Parse(`
 <html>
 <head>
 <meta charset="utf-8">
-<script>  
-window.addEventListener("load", function(evt) {
-    var output = document.getElementById("output");
-    var input = document.getElementById("input");
-    var ws;
-    var print = function(message) {
-        var d = document.createElement("div");
-        d.innerHTML = message;
-        output.appendChild(d);
-    };
-    document.getElementById("open").onclick = function(evt) {
-        if (ws) {
-            return false;
-        }
-        ws = new WebSocket("{{.}}");
-        ws.onopen = function(evt) {
-            print("OPEN");
-        }
-        ws.onclose = function(evt) {
-            print("CLOSE");
-            ws = null;
-        }
-        ws.onmessage = function(evt) {
-            print("RESPONSE: " + evt.data);
-        }
-        ws.onerror = function(evt) {
-            print("ERROR: " + evt.data);
-        }
-        return false;
-    };
-    document.getElementById("send").onclick = function(evt) {
-        if (!ws) {
-            return false;
-        }
-        print("SEND: " + input.value);
-        ws.send(input.value);
-        return false;
-    };
-    document.getElementById("close").onclick = function(evt) {
-        if (!ws) {
-            return false;
-        }
-        ws.close();
-        return false;
-    };
-});
+<script>
+// Websocket.
+let ws = new WebSocket("{{.}}")
+
+// Upload message.
+let uploadMsg = [
+    {"cmd":"upload","opt":{"list":[{"origin":"/Users/zhangbo/Downloads/archive/cv-module.pdf"}, {"origin":"/Users/zhangbo/Downloads/archive/php-comment.md"}]}},
+    {"cmd":"upload","opt":{"list":[{"origin":"/Users/zhangbo/Codec/images-input/paciffic.99974.dpx"}, {"origin": "/Users/zhangbo/Downloads/archive/ProjectBriefing.pdf"}]}},
+    {"cmd":"upload","opt":{"list":[{"origin":"/Volumes/Seagate/Codec/audio-input/120.ac3"}]}}
+]
+
+let listMsg = {"cmd": "list", "opt": {}}
+
+let watchMsg = {
+    cmd: "watch",
+    opt: {}
+}
+
+let offWatchMsg = {
+    cmd: "offwatch",
+    opt: {}
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+ws.onopen = async function(evt) {
+    ws.send(JSON.stringify(uploadMsg[0]))
+    ws.send(JSON.stringify(uploadMsg[1]))
+
+    // ws.send(JSON.stringify(uploadMsg[2]))
+    // ws.send(JSON.stringify(watchMsg))
+
+    // ws.send(JSON.stringify(listMsg))
+
+    // await sleep(2000)
+
+    // ws.send(JSON.stringify(offWatchMsg))
+
+}
 </script>
 </head>
-<body>
-<table>
-<tr><td valign="top" width="50%">
-<p>Click "Open" to create a connection to the server, 
-"Send" to send a message to the server and "Close" to close the connection. 
-You can change the message and send multiple times.
-<p>
-<form>
-<button id="open">Open</button>
-<button id="close">Close</button>
-<p><textarea style="font-size:18px;" id="input" rows="10" cols="90"></textarea>
-<button id="send">Send</button>
-</form>
-</td><td valign="top" width="50%">
-<div id="output"></div>
-</td></tr></table>
-</body>
+
 </html>
 `))

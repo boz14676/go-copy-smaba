@@ -1,34 +1,44 @@
 package main
 
 import (
-    "github.com/gorilla/websocket"
     "strings"
     "time"
 )
 
-type Heartbeat struct {
-    *UploadList
-}
+const HeartbeatSec = 1
 
-func Ticker(c *websocket.Conn) {
-    ticker := time.NewTicker(time.Second)
+func Ticker() {
+    ticker := time.NewTicker(HeartbeatSec * time.Second)
     defer ticker.Stop()
 
     for {
         select {
         case <-ticker.C:
-            tUpload := make([]Upload, len(UploadSave.List))
+            if len(UploadSave.List) == 0 {
+                continue
+            }
+
+            var tUpload UploadList
             for _,upload := range UploadSave.List {
-                if upload.IsOnWatch {
-                    tUpload = append(tUpload, upload)
+                if upload.IsOnWatch == true && upload.Status != StatusSucceeded && upload.IsPerCmplt != true {
+                    // Stop keep watching if the transfer size equals the total size.
+                    if upload.TransSize == upload.TotalSize {
+                        upload.IsPerCmplt = true
+                    }
+
+                    // fmt.Printf("heartbeat-upload:%+v \n", upload)
+
+                    tUpload.List = append(tUpload.List, upload)
                 }
             }
 
-            if len(tUpload) > 0 {
+            // fmt.Printf("heartbeat-t-upload:%+v", len(tUpload))
+
+            if len(tUpload.List) > 0 {
                 var resp RespWrap
-                resp.setStatus(200)
-                resp.respWrapper(strings.ToLower(ActUpload), UploadSave)
-                if err := c.WriteJSON(resp); err != nil {
+                resp.setStatus(200, "The tasks is processing.")
+                resp.respWrapper(strings.ToLower(ActWatch), tUpload)
+                if err := WsConn.WriteJSON(resp); err != nil {
                     logger(wsLogTag).Error(err)
                 }
             }

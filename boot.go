@@ -2,6 +2,7 @@ package main
 
 import (
     log "github.com/sirupsen/logrus"
+    logUnderlying "log"
     "os"
     "runtime"
     "sync"
@@ -16,9 +17,14 @@ var MaxWorker = runtime.NumCPU()
 //     }
 // }
 
-func checkErr(LogTag string, err error) {
+func checkErr(LogTag string, err error, soft ...uint8) {
     if err != nil {
-        logger(LogTag).Fatal(err)
+        // If it is soft error handle.
+        if soft != nil {
+            logger(LogTag).Error(err)
+        } else {
+            logger(LogTag).Fatal(err)
+        }
     }
 }
 
@@ -36,6 +42,7 @@ func logger(optional ...string) *log.Entry {
 }
 
 func init() {
+    logUnderlying.SetFlags(logUnderlying.LstdFlags | logUnderlying.Lshortfile)
     // Log as JSON instead of the default ASCII formatter.
     // log.SetFormatter(&log.JSONFormatter{})
 
@@ -48,7 +55,6 @@ func init() {
 }
 
 func main() {
-
     Wg.Add(1)
     go openWs()
 
@@ -59,4 +65,3 @@ func main() {
 
     Wg.Wait()
 }
-
