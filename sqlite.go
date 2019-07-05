@@ -156,21 +156,22 @@ func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error
 
     // logrus.Debug(SafeStr(querySql))
 
+    var _upload Upload
     for rows.Next() {
-        err = rows.Scan(&upload.UUID, &upload.SourceFile, &upload.DestFile, &upload.Status, &upload.TotalSize, &upload.Created, &upload.Updated)
+        err = rows.Scan(&_upload.UUID, &_upload.SourceFile, &_upload.DestFile, &_upload.Status, &_upload.TotalSize, &_upload.Created, &_upload.Updated)
         if err != nil {
             logger(SqliteLogTag).Error("rows scanning: ", err)
             continue
         }
 
         uploadList = append(uploadList, struct {
-            *Upload
+            Upload
             Created int64
             Updated int64
         }{
-            Upload: upload,
-            Created: upload.Created.Unix(),
-            Updated: upload.Updated.Unix(),
+            Upload: _upload,
+            Created: _upload.Created.Unix(),
+            Updated: _upload.Updated.Unix(),
         })
     }
 
