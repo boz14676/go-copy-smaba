@@ -35,6 +35,7 @@ func WinMount() (drive string, err error) {
 	}
 
 	if drive != "" {
+		drive += ":"
 		return
 	}
 
@@ -54,6 +55,8 @@ func WinMount() (drive string, err error) {
 			logger(uploadLogTag).Error(errors.New("mount built has failed"))
 		} else {
 			logger(uploadLogTag).Info("mount built has succeeded")
+
+			drive = alloc
 
 			// Rename the name of drive description.
 			Exec2(`reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\##` + strings.Replace(netAddr, "/", "#", -1) + `" /f /v "_LabelFromReg" /t REG_SZ /d "` + projectCurPath + `"`)
