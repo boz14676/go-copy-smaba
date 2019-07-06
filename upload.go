@@ -12,6 +12,7 @@ import (
     "path/filepath"
     "runtime"
     "strings"
+    "sync"
     "time"
 )
 
@@ -51,8 +52,12 @@ type Upload struct {
     Updated    time.Time `json:"-"`
 }
 
+var ProcCounter int64
+
 // Upload list struct.
 type UploadList struct {
+    sync.Mutex
+
     List []*Upload `json:"list"`
 }
 
@@ -186,6 +191,8 @@ func (uploadList *UploadList) Process() {
 
         // Mark as is enqueued.
         upload.IsEnqueued = true
+
+        ProcCounter++
     }
 }
 
@@ -205,12 +212,7 @@ func (upload *Upload) Process() {
     defer func() {
         // TODO: It will retry 3 times for the failed job.
 
-        // Remove current element from the slice.
-        for i, _upload := range UploadSave.List {
-            if _upload.UUID == upload.UUID {
-                UploadSave.List = append(UploadSave.List[:i], UploadSave.List[i+1:]...)
-            }
-        }
+        ProcCounter--
     }()
 
     upload.log(taskLogTag).Info("the job is launched")
@@ -286,7 +288,7 @@ func (upload *Upload) genFilename(ext string) (uuidStr string, err error) {
 }
 
 // Setup function for mount a local mapping which is related to specified network address.
-// Os platform supported: "Macos", "Windows".
+// Os platform supported: "MacOS", "Windows".
 func (upload *Upload) Setup(sourceFile string, destFile string) (err error) {
     // Mount a local mapping which is related to specified network address.
     var destDir string

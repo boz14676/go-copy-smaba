@@ -90,9 +90,6 @@ func ws(w http.ResponseWriter, r *http.Request) {
 
     WsConn = c
 
-    // Ticker
-    go Ticker()
-
     defer c.Close()
 
     for {
@@ -135,9 +132,13 @@ func ws(w http.ResponseWriter, r *http.Request) {
                     logger(wsLogTag).Error(err)
                 }
             } else {
+                UploadSave.Lock()
+
                 UploadSave.List = append(UploadSave.List, uploadMsg.Opt.List...)
 
                 UploadSave.Process()
+
+                UploadSave.Unlock()
 
                 resp.setStatus(200)
                 resp.respWrapper(strings.ToLower(ActUpload), UploadSave)
@@ -358,9 +359,37 @@ let ws = new WebSocket("{{.}}")
 
 // Upload message.
 let uploadMsg = [
-    {"cmd":"upload","opt":{"list":[{"origin":"/Users/zhangbo/Downloads/archive/cv-module.pdf"}, {"origin":"/Users/zhangbo/Downloads/archive/php-comment.md"}]}},
+    {"cmd":"upload","opt":{"list":[{"origin":"/Users/zhangbo/Downloads/archive/cv-module.pdf"},{"origin":"/Users/zhangbo/Downloads/archive/php-comment.md"}]}},
     {"cmd":"upload","opt":{"list":[{"origin":"/Users/zhangbo/Codec/images-input/paciffic.99974.dpx"}, {"origin": "/Users/zhangbo/Downloads/archive/ProjectBriefing.pdf"}]}},
-    {"cmd":"upload","opt":{"list":[{"origin":"/Volumes/Seagate/Codec/audio-input/120.ac3"}]}}
+    {"cmd":"upload","opt":{"list":[{"origin":"/Volumes/Seagate/Codec/audio-input/120.ac3"}]}},
+
+    {"cmd":"upload","opt":{"list":[
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-01.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-02.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-03.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-04.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-05.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-06.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-07.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-08.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-09.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/B-10.pdf"},
+    ]}},
+
+    {"cmd":"upload","opt":{"list":[
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-01.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-02.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-03.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-04.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-05.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-06.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-07.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-08.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-09.pdf"},
+        {"origin": "/Users/zhangbo/Archive/Save/test/D-10.pdf"},
+    ]}},
+
+    
 ]
 
 let listMsg = {"cmd": "list", "opt": {}}
@@ -380,10 +409,17 @@ function sleep(ms) {
 }
 
 ws.onopen = async function(evt) {
-    ws.send(JSON.stringify(uploadMsg[0]))
-    ws.send(JSON.stringify(uploadMsg[1]))
+    // ws.send(JSON.stringify(uploadMsg[0]))
+    // ws.send(JSON.stringify(uploadMsg[1]))
 
     // ws.send(JSON.stringify(uploadMsg[2]))
+
+    ws.send(JSON.stringify(uploadMsg[3]))
+
+    await sleep(2000)
+
+    ws.send(JSON.stringify(uploadMsg[4]))
+
     // ws.send(JSON.stringify(watchMsg))
 
     // ws.send(JSON.stringify(listMsg))
