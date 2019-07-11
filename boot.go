@@ -8,25 +8,10 @@ import (
     "sync"
 )
 
-var Wg sync.WaitGroup
-var MaxWorker = runtime.NumCPU()
-
-// func checkErr(logTag string, err error) {
-//     if err != nil {
-//         // log.WithFields({"subject": }).Panic(err)
-//     }
-// }
-
-func checkErr(LogTag string, err error, soft ...uint8) {
-    if err != nil {
-        // If it is soft error handle.
-        if soft != nil {
-            logger(LogTag).Error(err)
-        } else {
-            logger(LogTag).Fatal(err)
-        }
-    }
-}
+var (
+    Wg sync.WaitGroup
+    MaxWorker = runtime.NumCPU() * 2
+)
 
 func logger(optional ...string) *log.Entry {
     var fields log.Fields
@@ -70,4 +55,9 @@ func main() {
     go Ticker()
 
     Wg.Wait()
+
+    // Close database instance.
+    defer func() {
+        _ = DBInstance.db.Close()
+    }()
 }

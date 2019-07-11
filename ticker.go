@@ -32,11 +32,11 @@ func Ticker() {
 
             var tUpload UploadList
             for _, upload := range UploadSave.List {
-                if upload.IsOnWatch == true && upload.Status != StatusSucceeded && upload.IsPerCmplt != true {
-                    // Stop keep watching if the transfer size equals the total size.
-                    if upload.TransSize == upload.TotalSize {
-                        upload.IsPerCmplt = true
-                    }
+                // Condition 1: The task status must be processing.
+                // Condition 2: The task's sign of on-watch must be opened.
+                // Condition 3: Stop keep watching if the transfer size equals the transfer size of previous.
+                if upload.Status == StatusProcessing && upload.OnWatch == true && upload.TransSize != upload.TransSizePrev {
+                    upload.TransSizePrev = upload.TransSize
 
                     tUpload.List = append(tUpload.List, upload)
                 }
@@ -52,13 +52,13 @@ func Ticker() {
             }
 
         case <-cleanTicker.C:
-            if ProcCounter == 0 {
-                UploadSave.Lock()
+            UploadSave.Lock()
+            if ProcCounter <= 0 {
                 UploadSave.List = []*Upload{}
-                UploadSave.Unlock()
             }
+            UploadSave.Unlock()
 
-            // logger().WithFields(log.Fields{"UploadSave.List": UploadSave.List,}).Debug("CleanTicker-BP")
+            // logger("ticker").WithFields(log.Fields{"UploadSave.List": UploadSave.List,}).Debug("CleanTicker-BP")
         }
     }
 }

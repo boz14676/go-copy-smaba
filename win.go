@@ -15,9 +15,13 @@ func getMntDrive() (drive string, err error) {
 		return
 	}
 
-	regrex := regexp.MustCompile(`OK\s{11}([A-Z]{1}):\s{8}\\{2}` + strings.Replace(netAddr, "/", `\\`, 1) + `\\` + projectCurPath)
+	reg, err := regexp.Compile(`OK\s{11}([A-Z]{1}):\s{8}\\{2}` + strings.Replace(netAddr, "/", `\\`, 1) + `\\` + projectCurPath)
 
-	ret := regrex.FindStringSubmatch(string(output))
+	if err != nil {
+		return
+	}
+
+	ret := reg.FindStringSubmatch(string(output))
 	if len(ret) == 2 && ret[1] != "" {
 		 drive = ret[1]
 	}
@@ -51,14 +55,16 @@ func WinMount() (drive string, err error) {
 		err = Exec2("net use " + alloc + " \\\\" + netAddr + "\\" + projectCurPath + " " + netPwd + " /user:" + netUser)
 
 		if err != nil {
-			logger(uploadLogTag).Error(errors.New("mount built has failed"))
+			return
 		} else {
 			logger(uploadLogTag).Info("mount built has succeeded")
 
 			// Rename the name of drive description.
-			Exec2(`reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\##` + strings.Replace(netAddr, "/", "#", -1) + `" /f /v "_LabelFromReg" /t REG_SZ /d "` + projectCurPath + `"`)
+			_ = Exec2(`reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\##` + strings.Replace(netAddr, "/", "#", -1) + `" /f /v "_LabelFromReg" /t REG_SZ /d "` + projectCurPath + `"`)
 		}
-
+	} else {
+		err = errors.New("mount built has failed")
+		return
 	}
 
 	return

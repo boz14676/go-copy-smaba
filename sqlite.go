@@ -1,12 +1,10 @@
 package main
 
 import (
-    "database/sql"
     "errors"
+    "github.com/jmoiron/sqlx"
     _ "github.com/mattn/go-sqlite3"
-    "regexp"
     "strconv"
-    "strings"
     "time"
 )
 
@@ -15,79 +13,67 @@ const (
     StatusProcessing int8 = 1 // Status of proceed.
     StatusSucceeded  int8 = 2 // Status of succeeded.
     StatusFailed     int8 = 3 // Status of failed.
+    StatusHangup     int8 = 5 // Status of hang-up.
+    StatusCancelled  int8 = 6 // Status of cancel.
 
     // Upload log tag.
     SqliteLogTag string = "sqlite"
 )
 
+// Database struct.
+type DB struct {
+    db *sqlx.DB
+}
+
+// Database instance.
+var DBInstance DB
+
+// Initialized: Open database file for db instance.
+func init() {
+    var err error
+    DBInstance.db, err = sqlx.Open("sqlite3", "./foo.db")
+    if err != nil {
+        logger(SqliteLogTag).Panic(err)
+    }
+}
+
 // Store data of files trans in database.
 func (upload *Upload) Store() (err error) {
-    db, err := sql.Open("sqlite3", "./foo.db")
-    if err != nil {
-        return
+    // Check if exists data by source filename.
+    _ = DBInstance.db.Get(&upload.UUID, "SELECT id FROM files_trans WHERE source_md5=$1", upload.SourceMd5)
+    if upload.UUID != 0 {
+        return errors.New("repeated request for files transfer tasks")
     }
 
-    stmt, err := db.Prepare("INSERT INTO files_trans(source_filename, dest_filename, created, updated) values(?,?,?,?)")
+    // Insert new data to db.
+    res, err := DBInstance.db.Exec(
+        "INSERT INTO files_trans(source_md5, source_filename, dest_filename, files_size, created, updated) values($1, $2, $3, $4, $5, $6)",
+        upload.SourceMd5, upload.SourceFile, upload.getBaseDestFile(), upload.TotalSize, time.Now(), time.Now(),
+    )
     if err != nil {
-        return
-    }
-
-    res, err := stmt.Exec(upload.SourceFile, upload.DestFile, time.Now(), time.Now())
-    if err != nil {
-        return
-    }
-
-    id, err := res.LastInsertId()
-    if err != nil {
-        return
-    }
-
-    if id == 0 {
-        err = errors.New("insert data to db has failed")
         return
     }
 
     // Set UUID into upload-object.
-    upload.UUID = id
+    upload.UUID, err = res.LastInsertId()
+    if err != nil {
+        return
+    }
 
     return
 }
 
-func SafeStr(s string) string {
-    chars := []string{"]", "^", "\\\\", "[", ".", "(", ")"}
-    r := strings.Join(chars, "")
-    re := regexp.MustCompile("[" + r + "]+")
-    s = re.ReplaceAllString(s, "")
-
-    return s
-}
-
-func (upload *Upload) SaveStatus(optional ...int64) (affect int64, err error) {
-    db, err := sql.Open("sqlite3", "./foo.db")
-    if err != nil {
-        return
-    }
-
-    var nBytes int64
-
-    if len(optional) > 0 {
-        nBytes = optional[0]
-    }
-
-    stmt, err := db.Prepare("update files_trans set status=?, files_trans_size=?, updated=? where id=?")
-    if err != nil {
-        return
-    }
-
-    res, err := stmt.Exec(upload.Status, nBytes, time.Now(), upload.UUID)
+func (upload *Upload) SaveStatus() (affect int64, err error) {
+    // Refresh task status of data in db.
+    res, err := DBInstance.db.Exec(
+        "update files_trans set status=$1, updated=$3 where id=$4",
+        upload.Status, time.Now(), upload.UUID,
+    )
     if err != nil {
         return
     }
 
     affect, err = res.RowsAffected()
-    if err != nil {
-        return
-    }
 
     if affect == 0 {
         err = errors.New("save upload in db has failed")
@@ -98,11 +84,6 @@ func (upload *Upload) SaveStatus(optional ...int64) (affect int64, err error) {
 }
 
 func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error) {
-    db, err := sql.Open("sqlite3", "./foo.db")
-    if err != nil {
-        return
-    }
-
     querySql := "SELECT * FROM files_trans WHERE 1=1"
 
     // Filter for created of time.
@@ -149,10 +130,11 @@ func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error
         querySql += " LIMIT " + limit + " OFFSET " + strconv.Itoa(int(listMsg.Offset))
     }
 
-    rows, err := db.Query(SafeStr(querySql))
+    rows, err := DBInstance.db.Query(querySql)
     if err != nil {
         return
     }
+    defer rows.Close()
 
     // logrus.Debug(SafeStr(querySql))
 
@@ -169,11 +151,34 @@ func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error
             Created int64
             Updated int64
         }{
-            Upload: _upload,
+            Upload:  _upload,
             Created: _upload.Created.Unix(),
             Updated: _upload.Updated.Unix(),
         })
     }
 
     return
+}
+
+// Finding destination file name from database.
+func (upload *Upload) FindBySourceFile() (err error) {
+    err = DBInstance.db.Get(&upload.UUID, "SELECT id FROM files_trans WHERE source_filename=$1", upload.SourceFile)
+    if err != nil {
+        return
+    }
+
+    return
+}
+
+// Finding destination file name from database.
+func (upload *Upload) Find() (err error) {
+    if upload.UUID == 0 {
+        return errors.New("primary id in upload is illegal")
+    }
+
+    return DBInstance.db.Get(
+        upload,
+        "SELECT source_filename, dest_filename FROM files_trans WHERE id=$1 LIMIT 1",
+        upload.UUID,
+    )
 }
