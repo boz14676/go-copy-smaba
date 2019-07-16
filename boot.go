@@ -1,8 +1,8 @@
 package main
 
 import (
+    "fmt"
     log "github.com/sirupsen/logrus"
-    logUnderlying "log"
     "os"
     "runtime"
     "sync"
@@ -27,7 +27,6 @@ func logger(optional ...string) *log.Entry {
 }
 
 func init() {
-    logUnderlying.SetFlags(logUnderlying.LstdFlags | logUnderlying.Lshortfile)
     // Log as JSON instead of the default ASCII formatter.
     // log.SetFormatter(&log.JSONFormatter{})
 
@@ -37,6 +36,24 @@ func init() {
 
     // Only log the debug(-warning) severity or above.
     log.SetLevel(log.DebugLevel)
+
+    log.SetReportCaller(true)
+    log.SetFormatter(&log.TextFormatter{
+        CallerPrettyfier: func(f *runtime.Frame) (string, string) {
+            filename := f.File
+            n := 0
+            for i := len(filename) - 1; i > 0; i-- {
+                if filename[i] == '/' {
+                    n++
+                    if n >= 2 {
+                        filename = filename[i+1:]
+                        break
+                    }
+                }
+            }
+            return fmt.Sprintf("%s()", f.Function), fmt.Sprintf("%s:%d", filename, f.Line)
+        },
+    })
 }
 
 func main() {
@@ -57,7 +74,5 @@ func main() {
     Wg.Wait()
 
     // Close database instance.
-    defer func() {
-        _ = DBInstance.db.Close()
-    }()
+    defer DBInstance.db.Close()
 }

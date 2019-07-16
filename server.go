@@ -6,7 +6,6 @@ import (
     "flag"
     "github.com/gorilla/websocket"
     log "github.com/sirupsen/logrus"
-    "html/template"
     "io/ioutil"
     "net/http"
     "strings"
@@ -61,17 +60,17 @@ type Message struct {
 }
 
 // Client message for upload.
-type UploadOptMsg struct {
+type UploadMsg struct {
     Opt UploadList `json:"opt"`
 }
 
 // Client message for list of uploaded.
-type ListOptMsg struct {
-    Opt ListMsg `json:"opt"`
+type ListMsg struct {
+    Opt ListWrap `json:"opt"`
 }
 
 // Client message for request params of list.
-type ListMsg struct {
+type ListWrap struct {
     Offset    int64  `json:"offset"`
     Limit     int64  `json:"amt"`
     Sort      string `json:"sort"`
@@ -86,11 +85,18 @@ type ListRespMsg struct {
 }
 
 // Initialized message of list.
-func (listMsg *ListMsg) Init() {
+func (listMsg *ListWrap) Init() {
     listMsg.Offset = -1
     listMsg.Limit = -1
     listMsg.Status = -1
 }
+
+// func (message *Message) log(act string, code int32) {
+//     log.WithFields(log.Fields{
+//         "subject": wsLogTag,
+//         "act": ActUpload,
+//     }).Debug("act-upload is calling: ", string(recv))
+// }
 
 // Websocket service.
 func ws(w http.ResponseWriter, r *http.Request) {
@@ -121,10 +127,8 @@ func ws(w http.ResponseWriter, r *http.Request) {
         // Get method which is from io.Reader of client message.
         recv, err = ioutil.ReadAll(r)
         if err = json.Unmarshal(recv, &m); err != nil {
-            resp.setStatus(400, "The request data is illegal: " + string(recv))
-            if err := c.WriteJSON(resp); err != nil {
-                logger(wsLogTag).Error(err)
-            }
+            resp.SetStatus(400, "The request data is illegal: " + string(recv))
+            resp.Send()
         }
 
         // Main process.
@@ -132,7 +136,7 @@ func ws(w http.ResponseWriter, r *http.Request) {
 
         // Process files upload.
         case ActUpload:
-            var uploadMsg UploadOptMsg
+            var uploadMsg UploadMsg
 
             // Log for request "upload" message.
             logger(wsLogTag).WithFields(log.Fields{"act": ActUpload}).Debug("act-upload is calling: ", string(recv))
@@ -141,34 +145,17 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil || uploadMsg.Opt.List == nil || len(uploadMsg.Opt.List) == 0 {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActUpload}).Error(errors.New("data illegal in upload message: " + string(recv)))
 
-                resp.setStatus(400, "The request data is illegal in upload message: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActUpload))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The request data is illegal in upload message: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActUpload))
+                resp.Send()
             } else {
-                UploadSave.Lock()
-
-                ProcCounter += len(uploadMsg.Opt.List)
-
-                UploadSave.List = append(UploadSave.List, uploadMsg.Opt.List...)
-
-                hasErr := UploadSave.Process()
-
-                UploadSave.Unlock()
-
-                if !hasErr {
-                    resp.setStatus(200)
-                    resp.respWrapper(strings.ToLower(ActUpload), UploadSave)
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
-                }
+                UploadSave.append(uploadMsg.Opt.List)
+                UploadSave.Process()
             }
 
         // Resuming files transferred.
         case ActResume:
-            var uploadMsg UploadOptMsg
+            var uploadMsg UploadMsg
 
             // Log for request "resume" message.
             logger(wsLogTag).WithFields(log.Fields{"act": ActResume}).Debug("act-resume is calling: ", string(recv))
@@ -177,14 +164,10 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil || uploadMsg.Opt.List == nil || len(uploadMsg.Opt.List) == 0 {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActResume}).Error(errors.New("data illegal in resume message: " + string(recv)))
 
-                resp.setStatus(400, "The request data is illegal in resume message: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActResume))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The request data is illegal in resume message: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActResume))
+                resp.Send()
             } else {
-                UploadSave.Lock()
-
                 // Dictionary table for Upload global save.
                 set := make(map[int64]*Upload)
                 for _, upload := range UploadSave.List {
@@ -194,60 +177,20 @@ func ws(w http.ResponseWriter, r *http.Request) {
                 for _, upload := range uploadMsg.Opt.List {
                     // If upload already in Upload global save.
                     if set[upload.UUID] != nil {
-                        if err = set[upload.UUID].EmitResuming(); err != nil {
-                            upload.log(wsLogTag).WithFields(log.Fields{"act": ActResume}).Error(err.Error())
-
-                            // Abandoned for upload task if there is error occurred.
-                            set[upload.UUID].Abandon()
-
-                            // Send message to websocket client.
-                            var resp RespWrap
-                            resp.setStatus(500, err.Error())
-
-                            var ulWrap UploadList
-                            ulWrap.Fill(upload)
-
-                            resp.respWrapper(strings.ToLower(ActResume), ulWrap)
-                            if err := WsConn.WriteJSON(resp); err != nil {
-                                logger(wsLogTag).Error(err)
-                            }
-                        }
-
-                        logger("testing").Debug("Find exists upload: ", set[upload.UUID])
-
+                        _ = set[upload.UUID].EmitResuming()
                     } else {
-                        if err = upload.EmitResuming(); err != nil {
-                            upload.log(wsLogTag).WithFields(log.Fields{"act": ActResume}).Error(err.Error())
-
-                            // Send message to websocket client.
-                            var resp RespWrap
-                            resp.setStatus(500, err.Error())
-
-                            var ulWrap UploadList
-                            ulWrap.Fill(upload)
-
-                            resp.respWrapper(strings.ToLower(ActResume), ulWrap)
-                            if err := WsConn.WriteJSON(resp); err != nil {
-                                logger(wsLogTag).Error(err)
-                            }
-                        } else {
-                            ProcCounter++
+                        if err := upload.EmitResuming(); err == nil {
                             UploadSave.List = append(UploadSave.List, upload)
                         }
-
-                        logger("testing").Debug("Push a new upload: ", upload)
-
                     }
                 }
 
                 UploadSave.Process()
-
-                UploadSave.Unlock()
             }
 
         // Get list for file tasks.
         case ActList:
-            var listMsg ListOptMsg
+            var listMsg ListMsg
             listMsg.Opt.Init()
 
             logger(wsLogTag).WithFields(log.Fields{"act": ActList}).Debug("act-list is calling: ", string(recv))
@@ -256,11 +199,9 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 logger(wsLogTag).Error(err)
 
-                resp.setStatus(400, "The request data is illegal in list message: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActList))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The request data is illegal in list message: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActList))
+                resp.Send()
 
             } else {
                 var upload Upload
@@ -268,27 +209,22 @@ func ws(w http.ResponseWriter, r *http.Request) {
                 if err != nil {
                     logger(wsLogTag).WithFields(log.Fields{"act": ActList}).Error(err)
 
-                    resp.setStatus(500, "Response errors occurred: " + string(recv))
-                    resp.respWrapper(strings.ToLower(ActList))
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
+                    resp.SetStatus(500, "Response errors occurred")
+                    resp.RespWrapper(strings.ToLower(ActList))
+                    resp.Send()
                 } else {
                     var listResp ListRespMsg
                     listResp.List = uploadList
 
-                    resp.setStatus(200)
-                    resp.respWrapper(strings.ToLower(ActList), listResp)
-
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
+                    resp.SetStatus(200)
+                    resp.RespWrapper(strings.ToLower(ActList), listResp)
+                    resp.Send()
                 }
             }
 
         // Watching for processing of files transfer.
         case ActWatch:
-            var watchMsg UploadOptMsg
+            var watchMsg UploadMsg
             err = json.Unmarshal(recv, &watchMsg)
 
             logger(wsLogTag).WithFields(log.Fields{"act": ActWatch}).Debug("act-watch is calling: ", string(recv))
@@ -296,25 +232,18 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActWatch}).Error(errors.New("data illegal in act-watch message: " + string(recv)))
 
-                resp.setStatus(400, "The Request data is illegal in watch message: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActWatch))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The Request data is illegal in watch message: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActWatch))
+                resp.Send()
             } else {
                 // Check global variable "uploadSave" if empty.
                 if UploadSave.List == nil || len(UploadSave.List) == 0 {
                     logger(wsLogTag).WithFields(log.Fields{"act": ActWatch}).Error(errors.New("no job are processing in message of act-watch"))
 
-                    resp.setStatus(403, "no job are processing")
-                    resp.respWrapper(strings.ToLower(ActWatch))
-
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
+                    resp.SetStatus(403, "no job are processing")
+                    resp.RespWrapper(strings.ToLower(ActWatch))
+                    resp.Send()
                 } else {
-                    UploadSave.Lock()
-
                     // Watching all the processing tasks when opt-msg is empty.
                     if watchMsg.Opt.List == nil {
                         for _, upload := range UploadSave.List {
@@ -333,15 +262,13 @@ func ws(w http.ResponseWriter, r *http.Request) {
                             }
                         }
                     }
-
-                    UploadSave.Unlock()
                 }
 
             }
 
         // Stop watching for processing of files transfer.
         case ActOffWatch:
-            var watchMsg UploadOptMsg
+            var watchMsg UploadMsg
             err = json.Unmarshal(recv, &watchMsg)
 
             logger(wsLogTag).WithFields(log.Fields{"act": ActOffWatch}).Debug("act-off-watch is calling: ", string(recv))
@@ -349,24 +276,17 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActOffWatch}).Error(errors.New("data illegal in act-off-watch message: " + string(recv)))
 
-                resp.setStatus(400, "The Request data is illegal in off-watch message: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActOffWatch))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The Request data is illegal in off-watch message: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActOffWatch))
+                resp.Send()
             } else {
                 if UploadSave.List == nil || len(UploadSave.List) == 0 {
                     logger(wsLogTag).WithFields(log.Fields{"act": ActOffWatch}).Error(errors.New("no job are processing in act-off-watch message"))
 
-                    resp.setStatus(403, "no job are processing")
-                    resp.respWrapper(strings.ToLower(ActWatch))
-
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
+                    resp.SetStatus(403, "no job are processing")
+                    resp.RespWrapper(strings.ToLower(ActWatch))
+                    resp.Send()
                 } else {
-                    UploadSave.Lock()
-
                     // Stop Watching all the processing tasks when opt-msg is empty.
                     if watchMsg.Opt.List == nil {
                         for _, upload := range UploadSave.List {
@@ -385,14 +305,12 @@ func ws(w http.ResponseWriter, r *http.Request) {
                             }
                         }
                     }
-
-                    UploadSave.Unlock()
                 }
             }
 
         // Pausing files transferred.
         case ActPause:
-            var uploadMsg UploadOptMsg
+            var uploadMsg UploadMsg
             err = json.Unmarshal(recv, &uploadMsg)
 
             logger(wsLogTag).WithFields(log.Fields{"act": ActPause}).Debug("act-pause is calling: ", string(recv))
@@ -400,41 +318,21 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActPause}).Error(errors.New("data illegal in act-pause message: " + string(recv)))
 
-                resp.setStatus(400, "The request data is illegal in message of act-pause: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActPause))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The request data is illegal in message of act-pause: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActPause))
+                resp.Send()
             } else {
                 if UploadSave.List == nil || len(UploadSave.List) == 0 {
                     logger(wsLogTag).WithFields(log.Fields{"act": ActPause}).Error(errors.New("no job are processing in act-pause message"))
 
-                    resp.setStatus(403, "There is no job are processing.")
-                    resp.respWrapper(strings.ToLower(ActPause))
-
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
+                    resp.SetStatus(403, "no job are processing")
+                    resp.RespWrapper(strings.ToLower(ActPause))
+                    resp.Send()
                 } else {
-                    UploadSave.Lock()
-
                     // Pausing all the processing tasks when opt-msg is empty.
                     if uploadMsg.Opt.List == nil {
                         for _, upload := range UploadSave.List {
-                            if !upload.EmitPause() {
-                                upload.log(wsLogTag).WithFields(log.Fields{"act": ActPause}).Error(errors.New("pausing failed in pause message"))
-
-                                var resp RespWrap
-                                resp.setStatus(500, "Pausing failed in pause message.")
-
-                                var ulWrap UploadList
-                                ulWrap.Fill(upload)
-
-                                resp.respWrapper(strings.ToLower(ActPause), ulWrap)
-                                if err := WsConn.WriteJSON(resp); err != nil {
-                                    logger(wsLogTag).Error(err)
-                                }
-                            }
+                            upload.EmitPause()
                         }
                     } else {
                         // Pausing specified processing task from uuid.
@@ -445,31 +343,16 @@ func ws(w http.ResponseWriter, r *http.Request) {
 
                         for _, _upload := range uploadMsg.Opt.List {
                             if set[_upload.UUID] != nil {
-                                if !set[_upload.UUID].EmitPause() {
-                                    set[_upload.UUID].log(wsLogTag).WithFields(log.Fields{"act": ActPause}).Error(errors.New("pausing failed in pause message"))
-
-                                    var resp RespWrap
-                                    resp.setStatus(500, "Pausing failed in pause message.")
-
-                                    var ulWrap UploadList
-                                    ulWrap.Fill(set[_upload.UUID])
-
-                                    resp.respWrapper(strings.ToLower(ActPause), ulWrap)
-                                    if err := WsConn.WriteJSON(resp); err != nil {
-                                        logger(wsLogTag).Error(err)
-                                    }
-                                }
+                                set[_upload.UUID].EmitPause()
                             }
                         }
                     }
-
-                    UploadSave.Unlock()
                 }
             }
 
         // Aborting files transferred.
         case ActAbort:
-            var uploadMsg UploadOptMsg
+            var uploadMsg UploadMsg
             err = json.Unmarshal(recv, &uploadMsg)
 
             logger(wsLogTag).WithFields(log.Fields{"act": ActAbort}).Debug("act-abort is calling: ", string(recv))
@@ -477,80 +360,36 @@ func ws(w http.ResponseWriter, r *http.Request) {
             if err != nil {
                 logger(wsLogTag).WithFields(log.Fields{"act": ActAbort}).Error(errors.New("data illegal in act-abort message: " + string(recv)))
 
-                resp.setStatus(400, "The request data is illegal in message of act-abort: " + string(recv))
-                resp.respWrapper(strings.ToLower(ActPause))
-                if err := c.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(400, "The request data is illegal in message of act-abort: " + string(recv))
+                resp.RespWrapper(strings.ToLower(ActPause))
+                resp.Send()
             } else {
-                if UploadSave.List == nil || len(UploadSave.List) == 0 {
-                    logger(wsLogTag).WithFields(log.Fields{"act": ActAbort}).Error(errors.New("no job are processing in act-abort message"))
+                // Aborting specified processing task from uuid.
+                set := make(map[int64]*Upload)
+                for _, upload := range UploadSave.List {
+                    set[upload.UUID] = upload
+                }
 
-                    resp.setStatus(403, "There is no job are processing.")
-                    resp.respWrapper(strings.ToLower(ActAbort))
-
-                    if err := c.WriteJSON(resp); err != nil {
-                        logger(wsLogTag).Error(err)
-                    }
-                } else {
-                    UploadSave.Lock()
-
-                    // Aborting all the processing tasks when opt-msg is empty.
-                    if uploadMsg.Opt.List == nil {
-                        for _, upload := range UploadSave.List {
-                            if !upload.EmitAbort() {
-                                upload.log(wsLogTag).WithFields(log.Fields{"act": ActAbort, "su": UploadSave}).Error(errors.New("abort failed in act-abort message"))
-
-                                // Send message to websocket client.
-                                var resp RespWrap
-                                resp.setStatus(500, "Aborting failed in abort message.")
-
-                                var ulWrap UploadList
-                                ulWrap.Fill(upload)
-
-                                resp.respWrapper(strings.ToLower(ActAbort), ulWrap)
-                                if err := WsConn.WriteJSON(resp); err != nil {
-                                    logger(wsLogTag).Error(err)
-                                }
-                            }
-                        }
+                for _, _upload := range uploadMsg.Opt.List {
+                    if set[_upload.UUID] != nil {
+                        set[_upload.UUID].EmitAbort()
                     } else {
-                        // Aborting specified processing task from uuid.
-                        set := make(map[int64]*Upload)
-                        for _, upload := range UploadSave.List {
-                            set[upload.UUID] = upload
-                        }
-
-                        for _, _upload := range uploadMsg.Opt.List {
-                            if set[_upload.UUID] != nil {
-                                if !set[_upload.UUID].EmitAbort() {
-                                    set[_upload.UUID].log(wsLogTag).WithFields(log.Fields{"act": ActAbort}).Error(errors.New("aborting failed in abort message"))
-
-                                    // Send message to websocket client.
-                                    var resp RespWrap
-                                    resp.setStatus(500, "Aborting failed in abort message.")
-
-                                    var ulWrap UploadList
-                                    ulWrap.Fill(set[_upload.UUID])
-
-                                    resp.respWrapper(strings.ToLower(ActAbort), ulWrap)
-                                    if err := WsConn.WriteJSON(resp); err != nil {
-                                        logger(wsLogTag).Error(err)
-                                    }
-                                }
+                        if err = _upload.Find(); err != nil {
+                            _upload.SendMsg(ActAbort, 500, 3008)
+                        } else {
+                            if err = _upload.Setup(); err != nil {
+                                _upload.SendMsg(ActAbort, 500, 2003)
+                            } else {
+                                _upload.erase()
                             }
                         }
                     }
-
-                    UploadSave.Unlock()
                 }
             }
 
         default:
-            resp.setStatus(400, "request data illegal: " + string(recv))
-            if err := c.WriteJSON(resp); err != nil {
-                logger(wsLogTag).Error(err)
-            }
+            resp.SetStatus(400, "request data illegal: " + string(recv))
+            resp.Send()
         }
 
     }
@@ -566,20 +405,22 @@ type RespWrap struct {
 }
 
 // Response status setting.
-func (resp *RespWrap) setStatus(code int16, optional ...string) {
+func (resp *RespWrap) SetStatus(code int16, optional ...string) {
     resp.Code = code
 
-    if len(optional) == 1 {
+    if len(optional) == 1 && optional[0] != "" {
         resp.Message = optional[0]
     } else {
         if resp.Code == 200 {
             resp.Message = "the request has succeeded."
+        } else {
+            resp.Message = "the request has failed."
         }
     }
 }
 
 // Response wrapper.
-func (resp *RespWrap) respWrapper(args ...interface{}) {
+func (resp *RespWrap) RespWrapper(args ...interface{}) {
     for i, arg := range args {
         // Cmd of resp assignment.
         if i == 0 {
@@ -599,6 +440,13 @@ func (resp *RespWrap) respWrapper(args ...interface{}) {
     }
 
     resp.Timestamp = time.Now().Unix()
+}
+
+// Send
+func (resp *RespWrap) Send() {
+    if err := WsConn.WriteJSON(resp); err != nil {
+        logger(wsLogTag).Error(err)
+    }
 }
 
 func openWs() {

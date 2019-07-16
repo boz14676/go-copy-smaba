@@ -8,17 +8,14 @@ import (
 
 const (
     WatchTickerSec = 1
-    cleanTickerSec = 60
 )
 
 func Ticker() {
     watchTicker := time.NewTicker(WatchTickerSec * time.Second)
-    cleanTicker := time.NewTicker(cleanTickerSec * time.Second)
 
     defer func() {
         Wg.Done()
         watchTicker.Stop()
-        cleanTicker.Stop()
     }()
 
     for {
@@ -44,21 +41,10 @@ func Ticker() {
 
             if len(tUpload.List) > 0 {
                 var resp RespWrap
-                resp.setStatus(200, "The tasks is processing.")
-                resp.respWrapper(strings.ToLower(ActWatch), tUpload)
-                if err := WsConn.WriteJSON(resp); err != nil {
-                    logger(wsLogTag).Error(err)
-                }
+                resp.SetStatus(200, "The tasks is processing.")
+                resp.RespWrapper(strings.ToLower(ActWatch), tUpload)
+                resp.Send()
             }
-
-        case <-cleanTicker.C:
-            UploadSave.Lock()
-            if ProcCounter <= 0 {
-                UploadSave.List = []*Upload{}
-            }
-            UploadSave.Unlock()
-
-            // logger("ticker").WithFields(log.Fields{"UploadSave.List": UploadSave.List,}).Debug("CleanTicker-BP")
         }
     }
 }

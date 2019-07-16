@@ -10,7 +10,7 @@ import (
 
 const (
     StatusWaited     int8 = 0 // Status of waited.
-    StatusProcessing int8 = 1 // Status of proceed.
+    StatusProcessing int8 = 1 // Status of processing.
     StatusSucceeded  int8 = 2 // Status of succeeded.
     StatusFailed     int8 = 3 // Status of failed.
     StatusHangup     int8 = 5 // Status of hang-up.
@@ -31,16 +31,22 @@ var DBInstance DB
 // Initialized: Open database file for db instance.
 func init() {
     var err error
-    DBInstance.db, err = sqlx.Open("sqlite3", "./foo.db")
+    DBInstance.db, err = sqlx.Open("sqlite3", "./go-copy-samba.db")
     if err != nil {
-        logger(SqliteLogTag).Panic(err)
+        logger(SqliteLogTag).Fatal(err)
     }
 }
 
 // Store data of files trans in database.
 func (upload *Upload) Store() (err error) {
     // Check if exists data by source filename.
-    _ = DBInstance.db.Get(&upload.UUID, "SELECT id FROM files_trans WHERE source_md5=$1", upload.SourceMd5)
+    _ = DBInstance.db.Get(
+        &upload.UUID,
+        "SELECT id FROM files_trans WHERE status <> $1 AND status <> $2 AND source_md5=$3",
+        StatusFailed,
+        StatusCancelled,
+        upload.SourceMd5,
+    )
     if upload.UUID != 0 {
         return errors.New("repeated request for files transfer tasks")
     }
@@ -66,7 +72,7 @@ func (upload *Upload) Store() (err error) {
 func (upload *Upload) SaveStatus() (affect int64, err error) {
     // Refresh task status of data in db.
     res, err := DBInstance.db.Exec(
-        "update files_trans set status=$1, updated=$3 where id=$4",
+        "update files_trans set status=$1, updated=$2 where id=$3",
         upload.Status, time.Now(), upload.UUID,
     )
     if err != nil {
@@ -83,33 +89,41 @@ func (upload *Upload) SaveStatus() (affect int64, err error) {
     return
 }
 
-func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error) {
+func (upload Upload) List(listMsg ListWrap) (uploadList []interface{}, err error) {
     querySql := "SELECT * FROM files_trans WHERE 1=1"
+
+    // var c CNTR
+    var querySlice []interface{}
 
     // Filter for created of time.
     if listMsg.Created != 0 {
-        querySql += " AND created = \"" + time.Unix(listMsg.Created, 0).String() + "\""
+
+        querySql += " AND created = ?"
+        querySlice = append(querySlice, time.Unix(listMsg.Created, 0).String())
+
     } else {
         if listMsg.StartedAt != 0 && listMsg.EndedAt != 0 {
 
-            querySql += " AND created BETWEEN \"" +
-                time.Unix(listMsg.StartedAt, 0).String() + "\" AND \"" +
-                time.Unix(listMsg.EndedAt, 0).String() + "\""
+            querySql += " AND created BETWEEN ?" + " AND ?"
+            querySlice = append(querySlice, time.Unix(listMsg.StartedAt, 0).String(), time.Unix(listMsg.EndedAt, 0).String())
 
         } else if listMsg.StartedAt != 0 {
 
-            querySql += " AND created >= \"" + time.Unix(listMsg.StartedAt, 0).String() + "\""
+            querySql += " AND created >= ?"
+            querySlice = append(querySlice, time.Unix(listMsg.StartedAt, 0).String())
 
         } else if listMsg.EndedAt != 0 {
 
-            querySql += " AND created <= \"" + time.Unix(listMsg.EndedAt, 0).String() + "\""
+            querySql += " AND created <= ?"
+            querySlice = append(querySlice, time.Unix(listMsg.EndedAt, 0).String())
 
         }
     }
 
     // Filter status.
     if listMsg.Status != -1 {
-        querySql += " AND status = " + strconv.Itoa(int(listMsg.Status))
+        querySql += " AND status = ?"
+        querySlice = append(querySlice, strconv.Itoa(int(listMsg.Status)))
     }
 
     // Sort sequence.
@@ -130,20 +144,28 @@ func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error
         querySql += " LIMIT " + limit + " OFFSET " + strconv.Itoa(int(listMsg.Offset))
     }
 
-    rows, err := DBInstance.db.Query(querySql)
+    rows, err := DBInstance.db.Queryx(querySql, querySlice...)
     if err != nil {
         return
     }
     defer rows.Close()
 
-    // logrus.Debug(SafeStr(querySql))
+    logger().Debug("Debugging query: ", querySql + " " , querySlice)
 
-    var _upload Upload
     for rows.Next() {
-        err = rows.Scan(&_upload.UUID, &_upload.SourceFile, &_upload.DestFile, &_upload.Status, &_upload.TotalSize, &_upload.Created, &_upload.Updated)
+        err = rows.StructScan(&upload)
         if err != nil {
             logger(SqliteLogTag).Error("rows scanning: ", err)
             continue
+        }
+
+        // Get transfer size if upload status is in requirement list.
+        if upload.Status == StatusHangup || upload.Status == StatusFailed || upload.Status == StatusProcessing {
+            if err := upload.getTransSize(); err != nil {
+                upload.log(2005).Error()
+            }
+        } else {
+            upload.TransSize = upload.TotalSize
         }
 
         uploadList = append(uploadList, struct {
@@ -151,9 +173,9 @@ func (upload *Upload) List(listMsg ListMsg) (uploadList []interface{}, err error
             Created int64
             Updated int64
         }{
-            Upload:  _upload,
-            Created: _upload.Created.Unix(),
-            Updated: _upload.Updated.Unix(),
+            Upload:  upload,
+            Created: upload.Created.Unix(),
+            Updated: upload.Updated.Unix(),
         })
     }
 
@@ -178,7 +200,7 @@ func (upload *Upload) Find() (err error) {
 
     return DBInstance.db.Get(
         upload,
-        "SELECT source_filename, dest_filename FROM files_trans WHERE id=$1 LIMIT 1",
+        "SELECT status, source_filename, dest_filename FROM files_trans WHERE id=$1 LIMIT 1",
         upload.UUID,
     )
 }
