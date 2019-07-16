@@ -141,7 +141,7 @@ func (upload *Upload) Copy21() (err error) {
 
     for {
         if upload.Pause || upload.Abort {
-            logger().Debug("hang-up is caught.")
+            log.Debug("hang-up is caught.")
             return ErrHangup
         }
 
@@ -245,7 +245,7 @@ func (upload *Upload) EmitResuming() error {
 
 // Execute os command.
 func Exec2(cmd string) (err error) {
-    logger(uploadLogTag).Debug("Command: \"" + cmd + "\"")
+    log.Debug("Command: \"" + cmd + "\"")
 
     parts := strings.Fields(cmd)
 
@@ -283,7 +283,7 @@ func Mount() (destDir string, err error) {
         if err != nil {
             return
         } else {
-            logger(uploadLogTag).Info("mount built has succeeded")
+            log.Info("mount built has succeeded")
         }
 
         return
@@ -517,13 +517,11 @@ func (upload *Upload) Setup() (err error) {
 func (upload *Upload) log(optional ...int32) *log.Entry {
     logFields := make(log.Fields)
 
-    if len(optional) > 0 {
-        // Inject err code to logger.
-        if optional[0] != 0 {
-            logFields["code"] = optional[0]
-            if ErrMaps[optional[0]] != "" {
-                logFields["message"] = ErrMaps[optional[0]]
-            }
+    // Inject err code to logger.
+    if len(optional) > 0 && optional[0] != 0 {
+        logFields["code"] = optional[0]
+        if ErrMaps[optional[0]] != "" {
+            logFields["message"] = ErrMaps[optional[0]]
         }
     }
 
@@ -531,12 +529,11 @@ func (upload *Upload) log(optional ...int32) *log.Entry {
     //     "upload": fmt.Sprintf("%+v", *upload),
     // })
 
-    uploadMap := make(map[string]interface{})
-    uploadMap["uid"] = upload.UUID
-    uploadMap["source_file"] = upload.SourceFile
-    uploadMap["dest_file"] = upload.DestFile
-
-    logFields["upload"] = uploadMap
+    logFields["upload"] = map[string]interface{} {
+        "uid": upload.UUID,
+        "source_file": upload.SourceFile,
+        "dest_file": upload.DestFile,
+    }
 
     return log.WithFields(logFields)
 }

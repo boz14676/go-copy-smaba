@@ -13,19 +13,6 @@ var (
     MaxWorker = runtime.NumCPU() * 2
 )
 
-func logger(optional ...string) *log.Entry {
-    var fields log.Fields
-
-    if len(optional) > 0 {
-        logTag := optional[0]
-        if logTag != "" {
-            fields = log.Fields{"subject": logTag}
-        }
-    }
-
-    return log.WithFields(fields)
-}
-
 func init() {
     // Log as JSON instead of the default ASCII formatter.
     // log.SetFormatter(&log.JSONFormatter{})

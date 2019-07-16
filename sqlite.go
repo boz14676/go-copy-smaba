@@ -4,6 +4,7 @@ import (
     "errors"
     "github.com/jmoiron/sqlx"
     _ "github.com/mattn/go-sqlite3"
+    log "github.com/sirupsen/logrus"
     "strconv"
     "time"
 )
@@ -33,7 +34,7 @@ func init() {
     var err error
     DBInstance.db, err = sqlx.Open("sqlite3", "./go-copy-samba.db")
     if err != nil {
-        logger(SqliteLogTag).Fatal(err)
+        log.Fatal(err)
     }
 }
 
@@ -150,12 +151,12 @@ func (upload Upload) List(listMsg ListWrap) (uploadList []interface{}, err error
     }
     defer rows.Close()
 
-    logger().Debug("Debugging query: ", querySql + " " , querySlice)
+    log.Debug("Debugging query: ", querySql + " " , querySlice)
 
     for rows.Next() {
         err = rows.StructScan(&upload)
         if err != nil {
-            logger(SqliteLogTag).Error("rows scanning: ", err)
+            log.Error("rows scanning: ", err)
             continue
         }
 

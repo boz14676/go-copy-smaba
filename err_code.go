@@ -34,4 +34,7 @@ func init() {
     ErrMaps[5003] = "emit abort has failed"
     ErrMaps[5004] = "emit watch has failed"
     ErrMaps[5100] = "act-%s is calling: %s"
+    ErrMaps[5101] = "request data is illegal in act-%s: %s"
+    ErrMaps[5102] = "act-%s: response errors occurred"
+    ErrMaps[5103] = "act-%s: no job are processing"
 }

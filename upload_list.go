@@ -12,8 +12,8 @@ type UploadList struct {
 }
 
 // Upload process launched for client message.
-func (uploadList *UploadList) Process() {
-    for _, upload := range uploadList.List {
+func (ul *UploadList) Process() {
+    for _, upload := range ul.List {
         if upload.Enqueued || upload.Status != StatusWaited {
             continue
         }
@@ -66,23 +66,35 @@ func (uploadList *UploadList) Process() {
     }
 
     // Safely reject upload list.
-    uploadList.RejectSafe()
+    ul.RejectSafe()
 }
 
 // Safely appended to upload list.
-func (ul *UploadList) append(_ul []*Upload) {
+func (ul *UploadList) Append(_ul []*Upload) {
     ul.Lock()
     ul.List = append(ul.List, _ul...)
     ul.Unlock()
 }
 
-// Fill single upload element into upload list.
-func (uploadList *UploadList) Fill(upload *Upload) {
-    if len(uploadList.List) == 0 {
-        uploadList.List = make([]*Upload, 1)
-        uploadList.List[0] = upload
+// Fill single upload element into upload list safely.
+func (ul *UploadList) FillSafe(upload *Upload) {
+    ul.Lock()
+    if len(ul.List) == 0 {
+        ul.List = make([]*Upload, 1)
+        ul.List[0] = upload
     } else {
-        uploadList.List = append(uploadList.List, upload)
+        ul.List = append(ul.List, upload)
+    }
+    ul.Unlock()
+}
+
+// Fill single upload element into upload list.
+func (ul *UploadList) Fill(upload *Upload) {
+    if len(ul.List) == 0 {
+        ul.List = make([]*Upload, 1)
+        ul.List[0] = upload
+    } else {
+        ul.List = append(ul.List, upload)
     }
 }
 
