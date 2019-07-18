@@ -7,6 +7,9 @@ import (
     "strings"
 )
 
+// Upload message global variable.
+var UploadSave UploadList
+
 // Client message.
 type Message struct {
     Method string `json:"cmd"`
@@ -124,7 +127,7 @@ func (msg *Message) Run() {
         msg.Abort()
 
     default:
-        resp.SetStatus(400, "request data illegal: "+string(msg.recv))
+        resp.SetStatus(400, fmt.Sprintf(ErrMaps[5201], string(msg.recv)))
         resp.Send()
     }
 }
@@ -337,13 +340,13 @@ func (msg *Message) Abort() {
         }
 
         for _, _upload := range uploadMsg.Opt.List {
-            if set[_upload.UUID] != nil {
+            if set[_upload.UUID] != nil && set[_upload.UUID].Status == StatusProcessing {
                 set[_upload.UUID].EmitAbort()
             } else {
-                if err = _upload.Find(); err != nil {
+                if err := _upload.Find(); err != nil {
                     _upload.SendMsg(ActAbort, 500, 3008)
                 } else {
-                    if err = _upload.Setup(); err != nil {
+                    if _, err := _upload.Setup(); err != nil {
                         _upload.SendMsg(ActAbort, 500, 2003)
                     } else {
                         _upload.erase()

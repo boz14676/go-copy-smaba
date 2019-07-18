@@ -17,6 +17,8 @@ func init() {
     ErrMaps[2004] = "removing files has failed"
     ErrMaps[2005] = "get files transferred size has failed"
     ErrMaps[2006] = "there is no dest filename when get files transferred size"
+    ErrMaps[2007] = "repeated request for files transfer tasks"
+    ErrMaps[2008] = "uuid for upload task is empty"
 
     // Database error message.
     ErrMaps[3001] = "db: store new task has failed"
@@ -33,8 +35,15 @@ func init() {
     ErrMaps[5002] = "emit pause has failed"
     ErrMaps[5003] = "emit abort has failed"
     ErrMaps[5004] = "emit watch has failed"
+
     ErrMaps[5100] = "act-%s is calling: %s"
     ErrMaps[5101] = "request data is illegal in act-%s: %s"
     ErrMaps[5102] = "act-%s: response errors occurred"
     ErrMaps[5103] = "act-%s: no job are processing"
+
+    ErrMaps[5200] = "unknown errors"
+    ErrMaps[5201] = "The request data is illegal: %s"
+
+    ErrMaps[5300] = "the request has succeeded"
+    ErrMaps[5301] = "the request has failed"
 }

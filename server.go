@@ -3,6 +3,7 @@ package main
 import (
     "encoding/json"
     "flag"
+    "fmt"
     "github.com/gorilla/websocket"
     log "github.com/sirupsen/logrus"
     "io/ioutil"
@@ -42,11 +43,10 @@ var (
         },
     }
 
-    // Upload message global variable.
-    UploadSave UploadList
-
     // Connection global variable for websocket.
     WsConn *websocket.Conn
+
+    Msg Message
 )
 
 // Websocket service.
@@ -61,29 +61,33 @@ func ws(w http.ResponseWriter, r *http.Request) {
 
     defer c.Close()
 
+    var resp RespWrap
+    var recv []byte
+
     for {
-        var msg Message
-        var resp RespWrap
-        var recv []byte
 
         // Get io.Reader of client message.
         _, r, err := c.NextReader()
 
         if err != nil {
-            log.Error(err)
+            log.Info(err)
             _ = c.Close()
             break
         }
 
         // Get method which is from io.Reader of client message.
         recv, err = ioutil.ReadAll(r)
-        if err = json.Unmarshal(recv, &msg); err != nil {
-            resp.SetStatus(400, "The request data is illegal: " + string(recv))
+        if err != nil {
+            resp.SetStatus(500, ErrMaps[5200])
+            resp.Send()
+        }
+        if err = json.Unmarshal(recv, &Msg); err != nil {
+            resp.SetStatus(400, fmt.Sprintf(ErrMaps[5201], string(recv)))
             resp.Send()
         }
 
-        msg.recv = recv
-        msg.Run()
+        Msg.recv = recv
+        Msg.Run()
     }
 }
 
@@ -104,9 +108,9 @@ func (resp *RespWrap) SetStatus(stat int16, message ...string) {
         resp.Message = message[0]
     } else {
         if resp.Stat == 200 {
-            resp.Message = "the request has succeeded."
+            resp.Message = ErrMaps[5300]
         } else {
-            resp.Message = "the request has failed."
+            resp.Message = ErrMaps[5301]
         }
     }
 }

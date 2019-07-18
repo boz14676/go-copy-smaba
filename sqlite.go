@@ -16,9 +16,6 @@ const (
     StatusFailed     int8 = 3 // Status of failed.
     StatusHangup     int8 = 5 // Status of hang-up.
     StatusCancelled  int8 = 6 // Status of cancel.
-
-    // Upload log tag.
-    SqliteLogTag string = "sqlite"
 )
 
 // Database struct.
@@ -40,22 +37,22 @@ func init() {
 
 // Store data of files trans in database.
 func (upload *Upload) Store() (err error) {
-    // Check if exists data by source filename.
-    _ = DBInstance.db.Get(
-        &upload.UUID,
-        "SELECT id FROM files_trans WHERE status <> $1 AND status <> $2 AND source_md5=$3",
-        StatusFailed,
-        StatusCancelled,
-        upload.SourceMd5,
-    )
-    if upload.UUID != 0 {
-        return errors.New("repeated request for files transfer tasks")
-    }
+    // // Check if exists data by source filename.
+    // _ = DBInstance.db.Get(
+    //     &upload.UUID,
+    //     "SELECT id FROM files_trans WHERE status <> $1 AND status <> $2 AND source_md5=$3",
+    //     StatusFailed,
+    //     StatusCancelled,
+    //     upload.SourceMd5,
+    // )
+    // if upload.UUID != 0 {
+    //     return errors.New(ErrMaps[2007])
+    // }
 
     // Insert new data to db.
     res, err := DBInstance.db.Exec(
         "INSERT INTO files_trans(source_md5, source_filename, dest_filename, files_size, created, updated) values($1, $2, $3, $4, $5, $6)",
-        upload.SourceMd5, upload.SourceFile, upload.getBaseDestFile(), upload.TotalSize, time.Now(), time.Now(),
+        upload.SourceMd5, upload.SourceFile, upload.BaseDestFile, upload.TotalSize, time.Now(), time.Now(),
     )
     if err != nil {
         return
@@ -196,7 +193,7 @@ func (upload *Upload) FindBySourceFile() (err error) {
 // Finding destination file name from database.
 func (upload *Upload) Find() (err error) {
     if upload.UUID == 0 {
-        return errors.New("primary id in upload is illegal")
+        return errors.New(ErrMaps[2008])
     }
 
     return DBInstance.db.Get(

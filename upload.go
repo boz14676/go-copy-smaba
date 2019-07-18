@@ -5,7 +5,6 @@ import (
     "encoding/hex"
     "errors"
     "fmt"
-    "github.com/google/uuid"
     log "github.com/sirupsen/logrus"
     "io"
     "os"
@@ -33,9 +32,6 @@ const (
 
     // Network current project path.
     projectCurPath = "smb_test"
-
-    // Upload log tag.
-    uploadLogTag = "upload"
 
     // Buffer size of transfer files.
     bufferSize = 1000000
@@ -68,9 +64,9 @@ var (
 )
 
 // Rewrite Write function of io.Copy to recording the processing of transfer files.
-func (pt *Upload) Write(p []byte) (int, error) {
+func (upload *Upload) Write(p []byte) (int, error) {
     n := len(p)
-    pt.TransSize += int64(n)
+    upload.TransSize += int64(n)
 
     return n, nil
 }
@@ -140,6 +136,7 @@ func (upload *Upload) Copy21() (err error) {
     buf := make([]byte, bufferSize)
 
     for {
+        // Stop files trans when pause/abort is calling.
         if upload.Pause || upload.Abort {
             log.Debug("hang-up is caught.")
             return ErrHangup
@@ -217,12 +214,14 @@ func (upload *Upload) Reset() {
 func (upload *Upload) EmitResuming() error {
     // Finding source and dest filename from database.
     if err := upload.Find(); err != nil {
+        upload.log(3008).Error(err)
         upload.SendMsg(ActResume, 500, 3008)
         return err
     }
 
     // Limit for condition of emitting.
     if upload.Resuming || upload.Status == StatusSucceeded || upload.Status == StatusCancelled {
+        upload.log(5001).Error()
         upload.SendMsg(ActResume, 500, 5001)
         return errors.New(ErrMaps[5001])
     }
@@ -236,6 +235,7 @@ func (upload *Upload) EmitResuming() error {
 
     // Update status of upload task in database.
     if _, err := upload.SaveStatus(); err != nil {
+        upload.log(3007).Error(err)
         upload.SendMsg(ActResume, 500, 3007)
         return err
     }
@@ -297,6 +297,7 @@ func (upload *Upload) Process() {
     defer func() {
         // Ignore pop the upload when the upload's status is hang-up.
         if upload.Status == StatusHangup {
+            upload.EmitOffWatch()
             return
         }
 
@@ -314,21 +315,17 @@ func (upload *Upload) Process() {
         UploadSave.Unlock()
     }()
 
-    var err error
-
     upload.log(1002).Info()
 
     // Mark status as processing.
     upload.Status = StatusProcessing
-    if _, err = upload.SaveStatus(); err != nil {
+    if _, err := upload.SaveStatus(); err != nil {
         upload.log(3002).Error(err)
     }
 
     // Start copy process.
-    err = upload.Copy21()
-
     // If files transfer is successful.
-    if err == io.EOF {
+    if err := upload.Copy21(); err == io.EOF {
         // Mark status as succeeded.
         upload.Status = StatusSucceeded
 
@@ -408,24 +405,16 @@ func (upload *Upload) erase() {
 
 // Generate filename for writing.
 func (upload *Upload) genFilename() (err error) {
-    _uuid, err := uuid.NewUUID()
-    if err != nil {
-        return
-    }
+    // _uuid, err := uuid.NewUUID()
+    // if err != nil {
+    //     return
+    // }
+    //
+    // upload.BaseDestFile = _uuid.String() + filepath.Ext(upload.SourceFile)
 
-    upload.BaseDestFile = _uuid.String() + filepath.Ext(upload.SourceFile)
+    upload.BaseDestFile = filepath.Base(upload.SourceFile)
 
     return
-}
-
-// Get base dest file name.
-func (upload *Upload) getBaseDestFile() string {
-    if upload.BaseDestFile != "" {
-        return upload.BaseDestFile
-    } else {
-        upload.BaseDestFile = filepath.Base(upload.DestFile)
-        return upload.BaseDestFile
-    }
 }
 
 // Get base dest file name.
@@ -452,16 +441,16 @@ func (upload *Upload) getSourceMd5() (err error) {
 
 // Get transfer size of destfile
 func (upload *Upload) getTransSize() (err error) {
-    // Get dest filename if it's empty but base dest filename is not empty.
+    // Get dest-filename if it's empty but base-dest-filename is not empty.
     if upload.DestFile == "" && upload.BaseDestFile != "" {
-        if err = upload.Setup(); err != nil {
+        if _, err = upload.Setup(); err != nil {
             return err
         }
     } else if upload.DestFile == "" {
         return errors.New(ErrMaps[2006])
     }
 
-    // Get remote size of files which has transferred.
+    // Get remote size of files which is has transferred.
     destFileStat, err := os.Stat(upload.DestFile)
     if err != nil {
         return err
@@ -473,9 +462,27 @@ func (upload *Upload) getTransSize() (err error) {
     return
 }
 
+// Get dest-filename by base-dest-filename.
+func (upload *Upload) GetDestFile() (err error) {
+    if upload.BaseDestFile != "" {
+        // Get current user.
+        usr, err := user.Current()
+        if err != nil {
+            return err
+        }
+
+        destDir := usr.HomeDir + "/" + localPath
+        upload.DestFile = destDir + "/" + upload.BaseDestFile
+
+        return nil
+    }
+
+    return errors.New("there is no base-dest-filename when setting dest-filename")
+}
+
 // Setup function for mount a local mapping which is related to specified network address.
 // Os platform supported: "MacOS", "Windows".
-func (upload *Upload) Setup() (err error) {
+func (upload *Upload) Setup() (errCode int32, err error) {
     // Mount a local mapping which is related to specified network address.
     var destDir string
 
@@ -490,25 +497,37 @@ func (upload *Upload) Setup() (err error) {
         upload.log(2001).Fatal(err)
     }
 
-    // Source file stat handled.
-    sourceFileStat, err := os.Stat(upload.SourceFile)
-    if err != nil {
-        return
-    }
-
-    if !sourceFileStat.Mode().IsRegular() {
-        err = fmt.Errorf("%s is not a regular file", upload.SourceFile)
-        return
-    }
-
-    // Set md5 of source file in upload task.
-    if err = upload.getSourceMd5(); err != nil {
-        return
-    }
-    // Set the total size of the source file.
-    upload.TotalSize = sourceFileStat.Size()
     // Set full path of dest file.
     upload.DestFile = destDir + "/" + upload.BaseDestFile
+
+    // Handle some stuff if the upload status is waited.
+    if upload.Status == StatusWaited {
+        // Source file stat handled.
+        sourceFileStat, err := os.Stat(upload.SourceFile)
+        if err != nil {
+            return errCode, err
+        }
+
+        if !sourceFileStat.Mode().IsRegular() {
+            err = fmt.Errorf("%s is not a regular file", upload.SourceFile)
+            return errCode, err
+        }
+
+        // // Set md5 of source file in upload task.
+        // if err = upload.getSourceMd5(); err != nil {
+        //     return
+        // }
+
+        // Set the total size of the source file.
+        upload.TotalSize = sourceFileStat.Size()
+
+        // Determine if exists for remote files by filename.
+        if !upload.Resuming {
+            if _, err := os.Stat(upload.DestFile); !os.IsNotExist(err) {
+                return 2007, errors.New(ErrMaps[2007])
+            }
+        }
+    }
 
     return
 }
@@ -529,10 +548,10 @@ func (upload *Upload) log(optional ...int32) *log.Entry {
     //     "upload": fmt.Sprintf("%+v", *upload),
     // })
 
-    logFields["upload"] = map[string]interface{} {
-        "uid": upload.UUID,
+    logFields["upload"] = map[string]interface{}{
+        "uid":         upload.UUID,
         "source_file": upload.SourceFile,
-        "dest_file": upload.DestFile,
+        "dest_file":   upload.DestFile,
     }
 
     return log.WithFields(logFields)

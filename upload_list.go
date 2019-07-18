@@ -28,14 +28,17 @@ func (ul *UploadList) Process() {
         }
 
         // Setup for upload task.
-        if err = upload.Setup(); err != nil {
+        if errCode, err := upload.Setup(); err != nil {
             upload.log(2003).Error(err)
 
             // Mark status as failed.
             upload.Status = StatusFailed
 
+            if errCode == 0 {
+                errCode = 2003
+            }
             // Send message to websocket client.
-            upload.SendMsg(ActUpload, 500, 2003)
+            upload.SendMsg(Msg.Method, 500, errCode)
 
             continue
         }
@@ -49,7 +52,7 @@ func (ul *UploadList) Process() {
                 upload.Status = StatusFailed
 
                 // Send message to websocket client.
-                upload.SendMsg(ActUpload, 500, 3001)
+                upload.SendMsg(Msg.Method, 500, 3001)
 
                 continue
             }
@@ -62,7 +65,7 @@ func (ul *UploadList) Process() {
         upload.Enqueued = true
 
         // Send message to websocket client.
-        upload.SendMsg(ActUpload, 200)
+        upload.SendMsg(Msg.Method, 200)
     }
 
     // Safely reject upload list.
